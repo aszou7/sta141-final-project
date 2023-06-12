@@ -1,0 +1,591 @@
+---
+title: "Course Project"
+date: "6/10/23"
+author: "Ashley Zou 919316144"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(root.dir = '/Users/ashleyzou/Downloads/Final Project/Data')
+```
+
+
+```{r echo=TRUE, eval=TRUE}
+library(dplyr)      
+library(ggplot2)
+library(tidyverse)
+library(knitr)
+
+setwd("/Users/ashleyzou/Downloads/Final Project/Data")
+
+session = list()
+for (i in 1:18) {
+  file_path <- paste("sessions/session", i, ".rds", sep="")
+  session[[i]] <- readRDS(file_path)
+}
+```
+
+
+# Section 1: Introduction
+
+The objective of this project is to build a predictive model that can predict the feedback type of randomly chosen trials from sessions 1 and 18. 
+
+This dataset was created by Steinmeiz in 2019. It documents mice behavior across 39 sessions, where each session has hundreds of trials. In each trial, mice were given a visual stimuli, either contrast left or contrast right. The mice were required to make a decision using a wheel based on these visual stimuli. If the left contrast was greater than the right contrast, success was indicated by turning the wheel right, and vice versa. When both contrasts are zero, success is indicated by holding the wheel still and failure is otherwise. If both contrasts are equal and non zero, left or right would randomly be chosen as correct.
+
+Activity in the neurons in certain parts of the brain were recorded in the form of spike trains. We use both the spike trains and contrast behavior to try to build a predictive model to determine the outcome of trials in a test set. 
+
+
+# Section 2: Exploratory Analysis
+
+```{r, echo = FALSE}
+n.session=length(session)
+
+# in library tidyverse
+meta <- tibble(
+  session_number = 1:n.session,
+  mouse_name = rep('name',n.session),
+  date_exp =rep('dt',n.session),
+  n_brain_area = rep(0,n.session),
+  n_neurons = rep(0,n.session),
+  n_trials = rep(0,n.session),
+  success_rate = rep(0,n.session)
+)
+
+
+for(i in 1:n.session){
+  tmp <- session[[i]]
+  meta[i, "mouse_name"] <- tmp$mouse_name
+  meta[i, "date_exp"] <- tmp$date_exp
+  meta[i, "n_brain_area"] <- length(unique(tmp$brain_area))
+  meta[i, "n_neurons"] <- dim(tmp$spks[[1]])[1]
+  meta[i, "n_trials"] <- length(tmp$feedback_type)
+  meta[i, "success_rate"] <- mean(tmp$feedback_type + 1) / 2
+}
+
+meta_w_name <- meta %>%
+  rename(
+    "Session" = session_number,
+    "Name" = mouse_name,
+    "Date" = date_exp,
+    "# Brain Areas" = n_brain_area,
+    "# Neurons" = n_neurons,
+    "# Trials" = n_trials,
+    "Success Rate" = success_rate
+)
+
+
+kable(meta_w_name, format = "html", table.attr = "class='table table-striped'", digits=2) 
+
+```
+
+**Data structure across sections:**
+Here, I have created a table with information on sessions 1 through 18. We can see that across the 18 trials, there are 4 different mice used - Cori, Forssmann, Hench, and Lederberg. Each session was recorded on a different date between 2016 and 2017. The number of brain areas differs for each mouse, as well as the number of neurons. In each session, there are hundreds of trials, with some being extracted from session 1 and session 18 to create our testing set. The success rate of each session is different as well. We now go more in depth to explore the neural activities and changes across trials. 
+
+```{r, echo = FALSE}
+i.s=2 # indicator for this session
+
+i.t=1 # indicator for this trial 
+
+average_spike_area<-function(i.t,this_session){
+  spk.trial = this_session$spks[[i.t]]
+  area= this_session$brain_area
+  spk.count=apply(spk.trial,1,sum)
+  spk.average.tapply=tapply(spk.count, area, mean)
+  return(spk.average.tapply)
+  }
+
+# Test the function
+average_spike_area(1,this_session = session[[i.s]])
+
+n.trial=length(session[[i.s]]$feedback_type)
+n.area=length(unique(session[[i.s]]$brain_area ))
+# Alternatively, you can extract these information in the meta that we created before.
+
+# We will create a data frame that contain the average spike counts for each area, feedback type,  the two contrasts, and the trial id
+
+trial.summary = matrix(nrow=n.trial,ncol= n.area+1+2+1)
+for(i.t in 1:n.trial){
+  trial.summary[i.t,]=c(average_spike_area(i.t,this_session = session[[i.s]]),
+                          session[[i.s]]$feedback_type[i.t],
+                        session[[i.s]]$contrast_left[i.t],
+                        session[[i.s]]$contrast_right[i.s],
+                        i.t)
+}
+
+colnames(trial.summary)=c(names(average_spike_area(i.t,this_session = session[[i.s]])), 'feedback', 'left contr.','right contr.','id' )
+
+# Turning it into a data frame
+trial.summary <- as_tibble(trial.summary)
+
+area.col=rainbow(n=n.area,alpha=0.7)
+# In base R, I usually initiate a blank plot before drawing anything on it
+plot(x=1,y=0, col='white',xlim=c(0,n.trial),ylim=c(0.5,2.2), xlab="Trials",ylab="Average spike counts", main=paste("Spikes per area in Session", i.s))
+
+
+for(i in 1:n.area){
+  lines(y=trial.summary[[i]],x=trial.summary$id,col=area.col[i],lty=2,lwd=1)
+  lines(smooth.spline(trial.summary$id, trial.summary[[i]]),col=area.col[i],lwd=3)
+  }
+legend("topright", 
+  legend = colnames(trial.summary)[1:n.area], 
+  col = area.col, 
+  lty = 1, 
+  cex = 0.8
+)
+```
+
+**Neural activity across trials:**
+In this section, I picked session 2 as the session to evaluate. Above is a graph of the neural activity in session 2. There is a different color for each brain area. In session 2 there are 5, which is on the lower end which makes this a little easier to look at compared to other sessions. The dashed lines show the number of spikes during any particular trial within session 2. The solid lines are smoothed and shows the overall trend and shape of the data for each brain area. We can see that in general, VISpm and POST had the highest number of spikes per trial, while root and CA1 had the lowest. We investigate this further with a trial level visualization.
+
+```{r, echo = FALSE}
+plot.trial<-function(i.t,area, area.col,this_session){
+    
+    spks=this_session$spks[[i.t]];
+    n.neuron=dim(spks)[1]
+    time.points=this_session$time[[i.t]]
+    
+    plot(0,0,xlim=c(min(time.points),max(time.points)),ylim=c(0,n.neuron+1),col='white', xlab='Time (s)',yaxt='n', ylab='Neuron', main=paste('Trial ',i.t, 'feedback', this_session$feedback_type[i.t] ),cex.lab=1.5)
+    for(i in 1:n.neuron){
+        i.a=which(area== this_session$brain_area[i]);
+        col.this=area.col[i.a]
+        
+        ids.spike=which(spks[i,]>0) # find out when there are spikes 
+        if( length(ids.spike)>0 ){
+            points(x=time.points[ids.spike],y=rep(i, length(ids.spike) ),pch='.',cex=2, col=col.this)
+        }
+      
+            
+    }
+    
+legend("topright", 
+  legend = area, 
+  col = area.col, 
+  pch = 16, 
+  cex = 0.8
+  )
+}
+
+varname=names(trial.summary);
+area=varname[1:(length(varname)-4)]
+par(mfrow=c(1,2))
+plot.trial(1,area, area.col,session[[i.s]])
+plot.trial(2,area, area.col,session[[i.s]])
+plot.trial(3,area, area.col,session[[i.s]])
+plot.trial(4,area, area.col,session[[i.s]])
+plot.trial(5,area, area.col,session[[i.s]])
+plot.trial(6,area, area.col,session[[i.s]])
+
+```
+
+**Changes across trials:**
+These graphs help us visualize the spike activity of the neurons at the trial level. The feedback helps us indicate whether this was a success or failure. From the first 6 trials, trials 1, 3 and 5 are failures whereas trials 2, 4, and 6 are successes. Out of the 6 trials examined, trials 2 and 6 had the least neural activity, especially in the VISpm brain area, and were both successes. This same pattern can not quite be attributed to trial 4, though. It is quite difficult to extract trends from this, but helps us visualize what the neural activity looks like in each trial and can still help us build the prediction model.
+
+
+```{r, echo = FALSE}
+library(dplyr)
+
+top_combinations <- data.frame(ContrastLeft = numeric(), ContrastRight = numeric(), Count = numeric(), SuccessCount = numeric())
+
+for (i in 1:length(session)) {
+  feedback_type <- session[[i]]$feedback_type
+  contrast_left <- as.numeric(session[[i]]$contrast_left)
+  contrast_right <- as.numeric(session[[i]]$contrast_right)
+
+  data <- data.frame(FeedbackType = feedback_type,
+                     ContrastLeft = contrast_left,
+                     ContrastRight = contrast_right)
+
+  success_counts <- data %>% 
+    group_by(ContrastLeft, ContrastRight) %>% 
+    summarize(Count = n(),
+              SuccessCount = sum(FeedbackType == 1))
+  top_combinations <- bind_rows(top_combinations, success_counts)
+}
+
+# Calculate the success rate and total count for each combination
+top_combinations_summary <- top_combinations %>%
+  group_by(ContrastLeft, ContrastRight) %>%
+  summarize(TotalCount = sum(Count),
+            SuccessCount = sum(SuccessCount),
+            SuccessRate = SuccessCount / TotalCount)
+
+# Print the top combinations, their counts, and success rates
+top_combinations_summary <- top_combinations_summary %>%
+  arrange(desc(SuccessRate))
+  
+top_combinations_summary
+
+```
+
+
+**Homogenity and heterogeneity across sections:**
+This table shows all possible contrast combinations, ordered by their success rate. We can see that the top 2 combinations of contrast behavior both have contrast right as 0, and the bottom 2 combinations are where contrast left and contrast right are the same. This makes sense, because if contrast behavior is the same, then either left or right is randomly chosen, and the success rate is about 50%. 
+
+# Section 3: Data Integration
+
+I don't want to use all sessions to build my prediction model, so I try different clustering methods to try and determine which sessions are most similar to session 1 and session 18. The first way I cluster is by creating a data frame with the summary statistics of average spikes across trials in a session. In my data frame, I have the min, first quartile, median, third quartile, max, and success rate of the mean number of spikes per trial in a session. 
+
+**Clustering**
+```{r, echo = FALSE}
+summary_stats <- list()
+success_rate <- numeric(18)
+
+for (i in 1:18) {
+  session_data <- session[[i]]
+  n_trials <- length(session_data$feedback_type)
+
+  avg_spike_counts <- sapply(1:n_trials, function(i.t) {
+    spk_trial <- session_data$spks[[i.t]]
+    spike_counts <- apply(spk_trial, 1, sum)
+    avg_spike_count <- mean(spike_counts)
+    return(avg_spike_count)
+  })
+
+  summary_stats[[i]] <- summary(avg_spike_counts)
+
+  success_rate[i] <- mean(session_data$feedback_type + 1) / 2
+}
+
+summary_df <- data.frame(
+  Session = 1:18,
+  Min = sapply(summary_stats, function(x) x[1]),
+  Q1 = sapply(summary_stats, function(x) x[2]),
+  Median = sapply(summary_stats, function(x) x[3]),
+  Q3 = sapply(summary_stats, function(x) x[4]),
+  Max = sapply(summary_stats, function(x) x[5]),
+  Success_Rate = success_rate
+)
+
+print(summary_df)
+
+```
+
+```{r, echo = FALSE}
+dataset = summary_df
+
+set.seed(6)
+wcss = vector()
+for (i in 1:8) wcss[i] = sum(kmeans(dataset, i)$withinss)
+plot(1:8,
+     wcss,
+     type = 'b',
+     main = paste('The Elbow Method'),
+     xlab = 'Number of clusters',
+     ylab = 'WCSS')
+```
+
+
+```{r, echo = FALSE}
+dist_matrix <- dist(summary_df)
+hclust_result <- hclust(dist_matrix)
+
+k <- 3
+clusters <- cutree(hclust_result, k)
+
+group_1 <- which(clusters == clusters[1])
+group_2 <- which(clusters == clusters[18])
+
+print("Sessions most similar to session 1 (spiking behavior):")
+print(group_1)
+
+print("Sessions most similar to session 18 (spiking behavior):")
+print(group_2)
+
+```
+
+In terms of average spiking behavior, I clustered the sessions into 3 groups based on the elbow method. Sessions 2-7 were identified as being similar to 1, and sessions 14-17 were identified as being similar to 18. 
+
+Now I am clustering based on contrast left/right behavior summary statistics. I've removed min, q2, and max, since they were the same across all sessions.
+
+```{r, echo = FALSE}
+median_contrast_left <- numeric(18)
+q3_contrast_left <- numeric(18)
+mean_contrast_left <- numeric(18)
+sd_contrast_left <- numeric(18)
+
+median_contrast_right <- numeric(18)
+q3_contrast_right <- numeric(18)
+mean_contrast_right <- numeric(18)
+sd_contrast_right <- numeric(18)
+
+for (i in 1:18) {
+  contrast_left <- session[[i]]$contrast_left
+  contrast_right <- session[[i]]$contrast_right
+  median_contrast_left[i] <- median(contrast_left)
+  q3_contrast_left[i] <- quantile(contrast_left, 0.75)
+  mean_contrast_left[i] <- mean(contrast_left)
+  sd_contrast_left[i] <- sd(contrast_left)
+  median_contrast_right[i] <- median(contrast_right)
+  q3_contrast_right[i] <- quantile(contrast_right, 0.75)
+  mean_contrast_right[i] <- mean(contrast_right)
+  sd_contrast_right[i] <- sd(contrast_right)
+}
+
+contrast_df <- data.frame(
+  Session = 1:18,
+  Median_Contrast_Left = median_contrast_left,
+  Q3_Contrast_Left = q3_contrast_left,
+  Mean_Contrast_Left = mean_contrast_left,
+  SD_Contrast_Left = sd_contrast_left,
+  Median_Contrast_Right = median_contrast_right,
+  Q3_Contrast_Right = q3_contrast_right,
+  Mean_Contrast_Right = mean_contrast_right,
+  SD_Contrast_Right = sd_contrast_right
+)
+
+print(contrast_df)
+
+```
+
+```{r, echo = FALSE}
+dataset = contrast_df
+
+set.seed(6)
+wcss = vector()
+for (i in 1:8) wcss[i] = sum(kmeans(dataset, i)$withinss)
+plot(1:8,
+     wcss,
+     type = 'b',
+     main = paste('The Elbow Method'),
+     xlab = 'Number of clusters',
+     ylab = 'WCSS')
+```
+
+```{r, echo = FALSE}
+dist_matrix <- dist(contrast_df)
+hclust_result <- hclust(dist_matrix)
+
+k <- 3
+clusters <- cutree(hclust_result, k)
+
+group.1 <- which(clusters == clusters[1])
+group.2 <- which(clusters == clusters[18])
+
+print("Sessions most similar to session 1 (contrast behavior):")
+print(group.1)
+
+print("Sessions most similar to session 18 (contrast behavior):")
+print(group.2)
+```
+
+Using the elbow method, I determined that about 3 clusters would be ideal. Based on clustering on the contrast behavior, sessions 2 through 7 were similar to 1 and sessions 15-17 were similar to 18. This is relatively similar to my clustering activity from spiking behavior, except the omission of session 14. So I will use sessions 2-7 and 15-17, which is the overlap between the results of my clustering, to build my model.
+
+```{r, echo = FALSE}
+new <- session[c(2:7, 15:17)]
+length(new)
+class(new)
+
+contrast_left <- numeric(0)
+contrast_right <- numeric(0)
+average_spike_count <- numeric(0)
+feedback_type <- numeric(0)
+n_brain_area <- numeric(0) 
+n_neurons <- numeric(0)
+
+df <- data.frame(Session_ID = integer(), Contrast_Left = numeric(), Contrast_Right = numeric(), Average_Spike_Count = numeric(), Feedback_Type = numeric(), Num_Brain_Area = numeric(), Num_Neurons = numeric())
+
+for (i in 1:length(new)) {
+  tmp <- new[[i]]
+  n_trials <- length(tmp$contrast_left) 
+  brain_areas <- tmp$brain_area 
+  num_brain_areas <- length(unique(brain_areas))
+  num_neurons <- dim(tmp$spks[[1]])[1]
+
+  for (j in 1:n_trials) {
+    session_id <- i  # Session ID
+    contrast_left <- tmp$contrast_left[j]  # Contrast left
+    contrast_right <- tmp$contrast_right[j]  # Contrast right
+    feedback_type <- ifelse(tmp$feedback_type[j] == -1, 0, 1)  # Convert to binary
+    spk_trial <- tmp$spks[[j]]  # Get the spikes for the current trial
+    spike_counts <- apply(spk_trial, 1, sum)  # Calculate the spike counts
+    avg_spike_count <- mean(spike_counts)  # Calculate the average spike count
+
+    row <- data.frame(Session_ID = session_id, Contrast_Left = contrast_left, Contrast_Right = contrast_right, Average_Spike_Count = avg_spike_count, Feedback_Type = feedback_type, Num_Brain_Area = num_brain_areas, Num_Neurons = num_neurons)
+
+    df <- rbind(df, row)
+  }
+}
+
+head(df)
+nrow(df)
+  
+```
+
+Here I have built a data frame that contains all the trials in the sessions I am using to build my predictive model. The variables include session id, contrast behavior, the average spike count in that trial, the feedback type, which has been converted into binary (-1 has been changed to 0), and the number of brain areas and number of neurons, which I originally intended to use, but realized that this was basically the same as using session id as a predictor variable since those 3 variables stay the same for all trials in a given session.
+
+**Splitting dataset**
+```{r, echo = FALSE}
+library(caTools)
+
+set.seed(123)
+
+sample <- sample.split(df$Feedback_Type, SplitRatio = 0.8)
+train <- subset(df, sample == TRUE)
+test <- subset(df, sample == FALSE)
+
+dim(train)
+dim(test)
+```
+
+I have now split my data frame into a training set and a test set. 80% of the data is put into a training set, where feedback_type is used to split the set, and the remaining is put into the test set.
+
+
+**Benchmark 1: Knn**
+```{r, echo = FALSE}
+library(class)
+
+predictors <- c("Session_ID", "Contrast_Left", "Contrast_Right", "Average_Spike_Count")
+
+k <- 11
+model <- knn(train[, predictors], 
+             test[, predictors], 
+             train$Feedback_Type, k)
+
+predictions <- as.numeric(model) - 1
+
+confusion_matrix <- table(predictions, test$Feedback_Type)
+confusion_matrix
+misclassification_rate <- 1 - sum(diag(confusion_matrix)) / sum(confusion_matrix)
+print("Misclassification Rate:")
+misclassification_rate
+
+```
+
+This is the first approach I tried. I tried using K nearest neighbors, and adjusting k to find the value that gave me the lowest misclassification rate. For my predictors, I used contrast behavior and average spike count, which I had originally based my clustering on, as well as the session ID. 
+
+
+**Benchmark 2: GLM**
+```{r, echo = FALSE}
+model <- glm(formula = Feedback_Type ~ Session_ID + Contrast_Left + Contrast_Right + Average_Spike_Count, data = train, family = binomial)
+summary(model)
+estimates <- coef(model)
+estimates
+standard_errors <- sqrt(diag(vcov(model)))
+standard_errors
+
+pred_glm <- predict(model, newdata = test)
+glm_class <- ifelse(pred_glm >= 0.5, "1", "0")
+conf_glm <- table(glm_class, test$Feedback_Type)
+conf_glm
+
+misclassification_rate_glm <- 1- sum(diag(conf_glm))/ sum(conf_glm)
+print("Misclassification Rate:")
+misclassification_rate_glm
+```
+
+This is my second approach. I used generalized linear model, with the predictor variables being the same ones I used for kNN. Then I created a confusion matrix and calculated the misclassification rate.
+
+
+**Benchmark 3: SVM**
+```{r, echo = FALSE}
+library(e1071)
+
+train$Feedback_Type <- as.factor(train$Feedback_Type)
+train <- train[, c("Session_ID", "Contrast_Left", "Contrast_Right", "Average_Spike_Count", "Feedback_Type")]
+
+svm_model <- svm(Feedback_Type ~ Contrast_Left + Contrast_Right + Average_Spike_Count + Session_ID, data = train, kernel = "radial")
+pred_svm <- predict(svm_model, newdata = test)
+conf_svm <- table(pred_svm, test$Feedback_Type)
+conf_svm
+
+misclassification_rate_svm <- 1- sum(diag(conf_svm))/ sum(conf_svm)
+print("Misclassification Rate:")
+misclassification_rate_svm
+```
+
+My third approach is to use a svm model. I trained it using the same variables as previously used.
+
+
+# Section 5 Prediction performance on the test sets. 
+
+Between the three models I chose, I chose the model with the lowest misclassification rate, which is the SVM model. This is what I will use for my final test data.
+
+```{r, echo = FALSE}
+setwd("/Users/ashleyzou/Downloads/Final Project/Data")
+
+
+test = list()
+for (i in 1:2) {
+  file_path <- paste("test/test", i, ".rds", sep="")
+  test[[i]] <- readRDS(file_path)
+}
+
+summary(test)
+```
+
+```{r, echo = FALSE}
+contrast_left <- numeric(0)
+contrast_right <- numeric(0)
+average_spike_count <- numeric(0)
+feedback_type <- numeric(0)
+n_brain_area <- numeric(0) 
+n_neurons <- numeric(0)
+
+testing_df <- data.frame(Session_ID = integer(), Contrast_Left = numeric(), Contrast_Right = numeric(), Average_Spike_Count = numeric(), Feedback_Type = numeric(), Num_Brain_Area = numeric(), Num_Neurons = numeric())
+
+for (i in 1:length(test)) {
+  tmp <- test[[i]]
+  n_trials <- length(tmp$contrast_left) 
+  brain_areas <- tmp$brain_area 
+  num_brain_areas <- length(unique(brain_areas))
+  num_neurons <- dim(tmp$spks[[1]])[1]
+
+  for (j in 1:n_trials) {
+    session_id <- i  # Session ID
+    contrast_left <- tmp$contrast_left[j]  # Contrast left
+    contrast_right <- tmp$contrast_right[j]  # Contrast right
+    feedback_type <- ifelse(tmp$feedback_type[j] == -1, 0, 1)  # Convert to binary
+    spk_trial <- tmp$spks[[j]]  # Get the spikes for the current trial
+    spike_counts <- apply(spk_trial, 1, sum)  # Calculate the spike counts
+    avg_spike_count <- mean(spike_counts)  # Calculate the average spike count
+
+    row <- data.frame(Session_ID = session_id, Contrast_Left = contrast_left, Contrast_Right = contrast_right, Average_Spike_Count = avg_spike_count, Feedback_Type = feedback_type, Num_Brain_Area = num_brain_areas, Num_Neurons = num_neurons)
+
+    testing_df <- rbind(testing_df, row)
+  }
+}
+
+head(testing_df)
+```
+
+```{r, echo = FALSE}
+svm_final <- predict(svm_model, newdata = testing_df)
+conf_svm_final <- table(svm_final, testing_df$Feedback_Type)
+conf_svm_final
+
+misclassification_rate_svm_final <- 1- sum(diag(conf_svm_final))/ sum(conf_svm_final)
+print("Misclassification Rate")
+misclassification_rate_svm_final
+
+recall <- conf_svm_final[2, 2] / sum(conf_svm_final[, 2])
+precision <- conf_svm_final[2, 2] / sum(conf_svm_final[2, ])
+f1_score <- 2 * (precision * recall) / (precision + recall)
+
+print("Precision:")
+precision
+print("Recall:")
+recall
+print("F1-score")
+f1_score
+```
+
+
+# Section 5 Discussion. 
+
+I picked the SVM model because it had the lowest misclassification rate out of the 3 methods I tried. The final misclassifiation rate for the testing set is 0.27, which is not bad. However, I did notice that the model predicted a success way more often than a failure. This also happened with my Knn and GLM models. 
+
+Something I wish I incorporated more into my model was the different brain areas. I wasn't necessarily sure how to tackle this issue, but if I had figured out a way to tackle clustering the brain areas, I think the model could have been a lot more successful. I think my clustering wasn't as effective as it could have been because it ended up just clustering the same mice together, which is still more effective than incorporating all sessions, but if I had identified brain areas that overlapped across different mice, it could have been more effective.
+
+# Acknowledgement
+
+I used ChatGPT throughout the project. A lot of my usage was either to help me troubleshoot my code or to give me the general structure to build my dataframes from the list. I also borrowed code from assigment 4 for building the models as well as the code from the project consulting session to build tables and graphs and code from discussion.
+
+
+# Reference {-}
+
+
+Steinmetz, N.A., Zatka-Haas, P., Carandini, M. et al. Distributed coding of choice, action and engagement across the mouse brain. Nature 576, 266–273 (2019). https://doi.org/10.1038/s41586-019-1787-x
+
+# Appendix
+```{r, ref.label=knitr::all_labels(),echo=TRUE,eval=FALSE}
+```
